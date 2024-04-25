@@ -1,5 +1,10 @@
 #include "flesh.h"
-#include "..\include\shape_matrices.h"
+
+#include <iostream>
+
+#include "shape_matrices.h"
+
+#include <omp.h>
 
 namespace flesh {
 
@@ -30,7 +35,7 @@ namespace flesh {
 		Eigen::MatrixXi const& T,
 		Eigen::MatrixXd const& B,
 		Eigen::VectorXd const& W,
-		piola_kirchhoff_fn const& P_fn,
+		piola_kirchhoff_strain_fn const& piola_kirchhoff_strain,
 		Eigen::MatrixXd& f)
 	{
 		const Eigen::Index nV = X.rows(); // Number of vertices
@@ -41,24 +46,43 @@ namespace flesh {
 		Eigen::MatrixXd D; // #T * 3 x 3 per-tet deformed shape matrices
 		shape_matrices(X, T, D);
 
+		Eigen::MatrixXd H(nF * 3, 3); // Elastic forces per tetrahedron (3 vertices per tetrahedron)
+
+		#pragma omp parallel for
 		for (Eigen::Index i = 0; i < nF; i++)
 		{
-			const Eigen::RowVector4i tet = T.row(i);
-
 			const Eigen::Matrix3d Bi = B.block<3, 3>(i * 3, 0);
 			const Eigen::Matrix3d Di = D.block<3, 3>(i * 3, 0);
 			
 			const Eigen::Matrix3d Fi = Di * Bi; // Deformation gradient
 
 			Eigen::Matrix3d P; // First Piola-Kirchhoff stress tensor
-			P_fn(Fi, P);
+			piola_kirchhoff_strain(Fi, P);
 
-			const Eigen::Matrix3d H = -W(i) * P * Bi.transpose(); // Elastic forces
-
-			f.row(tet(0)) += H.col(0);
-			f.row(tet(1)) += H.col(1);
-			f.row(tet(2)) += H.col(2);
-			f.row(tet(3)) -= H.col(0) + H.col(1) + H.col(2);
+			H.block<3, 3>(i * 3, 0) = -W(i) * P * Bi.transpose(); // Elastic forces
 		}
+
+		for (Eigen::Index i = 0; i < nF; i++)
+		{
+			const Eigen::RowVector4i tet = T.row(i);
+			const Eigen::Matrix3d Hi = H.block<3, 3>(i * 3, 0);
+			f.row(tet(0)) += Hi.col(0);
+			f.row(tet(1)) += Hi.col(1);
+			f.row(tet(2)) += Hi.col(2);
+			f.row(tet(3)) -= Hi.col(0) + Hi.col(1) + Hi.col(2);
+		}
+	}
+
+	void flesh_force_differentials(
+		Eigen::MatrixXd const& X,
+		Eigen::MatrixXi const& T,
+		Eigen::MatrixXd const& V,
+		Eigen::MatrixXd const& B,
+		Eigen::VectorXd const& W,
+		piola_kirchhoff_strain_differential_fn const& piola_kirchhoff_strain_differential,
+		Eigen::MatrixXd& f,
+		Eigen::MatrixXd& df)
+	{
+		
 	}
 }
