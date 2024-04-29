@@ -58,6 +58,10 @@ namespace flesh {
 
 			Eigen::Matrix3d P; // First Piola-Kirchhoff stress tensor
 			piola_kirchhoff_strain(Fi, P);
+		#if _DEBUG
+			if (P.hasNaN())
+				std::cout << "P has NaN" << std::endl;
+		#endif
 
 			H.block<3, 3>(i * 3, 0) = -W(i) * P * Bi.transpose(); // Elastic forces
 		}

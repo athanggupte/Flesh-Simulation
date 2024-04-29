@@ -67,6 +67,21 @@ enum MaterialType
 	eMaterialType_StableNeoHookean
 };
 
+void help()
+{
+	std::cout << R"(Usage:    driver [options...]
+
+    Options:
+  -n <frames>         Number of frames to write to file
+  -w                  Write simulation to file
+  -p <file>           Playback simulation from file
+  -f <file>           Model file to load (default: cube_bar)
+  -Y <youngs modulus> Young's modulus (default: 1e6)
+  -P <poisson ratio>  Poisson ratio (default: 0.49)
+  -m <material type>  Material type [stvk, stneo] (default: stneo)
+)";
+}
+
 int main(int argc, char *argv[])
 {
 	static bool write_to_file = false;
@@ -81,6 +96,7 @@ int main(int argc, char *argv[])
 	static double fixture_thickness = 0.2;
 	static double youngs_modulus = 1e6;
 	static double poisson_ratio = 0.49;
+	static bool gravity = true;
 
 	static int frameNumber = 0;
 
@@ -120,6 +136,9 @@ int main(int argc, char *argv[])
 					material_type = eMaterialType_StableNeoHookean;
 				}
 				break;
+			case '?':
+				help();
+				exit(1);
 			}
 		}
 	}
@@ -263,12 +282,13 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < f_external.rows(); i++)
 	{
 		f_external.row(i) = Eigen::Vector3d(0, -9.8, 0);
-		//f_external.row(i) = Eigen::Vector3d(0, 0, 0);
 	}
 
 	static std::vector<Eigen::Index> edge_face_vertices;
 	double max_x = V.colwise().maxCoeff()(0);
 	double min_x = V.colwise().minCoeff()(0);
+	static int left_fixed_count = 0, right_fixed_count = 0;
+
 	// Fix left end
 	if (fixture_type == eFixtureType_OneEnd || fixture_type == eFixtureType_BothEnds)
 	{
@@ -280,6 +300,8 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
+	left_fixed_count = edge_face_vertices.size();
+
 	// Fix right end
 	if (fixture_type == eFixtureType_BothEnds)
 	{
@@ -291,8 +313,9 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
+	right_fixed_count = edge_face_vertices.size() - left_fixed_count;
 
-	Eigen::Matrix<double,Eigen::Dynamic,3> edge_verts_start(edge_face_vertices.size(), 3);
+	static Eigen::Matrix<double,Eigen::Dynamic,3> edge_verts_start(edge_face_vertices.size(), 3);
 	for (int i = 0; i < edge_face_vertices.size(); i++)
 	{
 		edge_verts_start.row(i) = simdata.X.row(edge_face_vertices[i]);
@@ -333,10 +356,34 @@ int main(int argc, char *argv[])
 				Eigen::RowVector3d rotated_radial_edge = Eigen::AngleAxisd(angle, edge_normal).toRotationMatrix() * edge_radial.row(i).transpose();
 				edge_verts.row(i) = rotated_radial_edge + edge_center;
 
-				simdata.X.row(edge_face_vertices[i]) = edge_verts.row(i);
+				TV.row(edge_face_vertices[i]) = edge_verts.row(i);
 			}
 		#endif
 
+		#if SHAKE_TEST || 1
+			for (int i = 0; i < edge_face_vertices.size(); i++)
+			{
+				TV.row(edge_face_vertices[i]) = edge_verts_start.row(i) + Eigen::RowVector3d(0, 0, 2 * sin(time * 2));
+			}
+
+		#endif
+
+			for (int i = 0; i < edge_face_vertices.size(); i++)
+			{
+				simdata.X.row(edge_face_vertices[i]) = TV.row(edge_face_vertices[i]);
+			}
+
+			if (gravity)
+			{
+				for (int i = 0; i < f_external.rows(); i++)
+				{
+					f_external.row(i) = Eigen::Vector3d(0, -9.8, 0);
+				}
+			}
+			else
+			{
+				f_external.setZero();
+			}
 
 			Eigen::MatrixXd f_elastic;
 			//f_elastic.setZero(simdata.X.rows(), 3);
@@ -344,15 +391,24 @@ int main(int argc, char *argv[])
 
 			// Eigen::VectorXd f_elastic_norm = f_elastic.rowwise().norm();
 			double f_elastic_norm_max = f_elastic.rowwise().norm().maxCoeff<Eigen::PropagateNaN>();
-			
-			if (f_elastic_norm_max > 1e11 || std::isnan<double>(f_elastic_norm_max))
+
+			if (f_elastic.hasNaN())
 			{
 			#if _DEBUG
 				__debugbreak();
 			#endif
-				std::cerr << "NaN Forces" << '\n';
+				std::cerr << "Forces are NaN!" << '\n';
 				exit(1);
 			}
+			if (f_elastic_norm_max > 1e300)
+			{
+			#if _DEBUG
+				__debugbreak();
+			#endif
+				std::cerr << "Forces too large!" << '\n';
+				exit(1);
+			}
+
 
 			Eigen::MatrixXd X, V;
 			X.resizeLike(simdata.X);
@@ -431,16 +487,25 @@ int main(int argc, char *argv[])
 	{
 		switch (key)
 		{
-			case GLFW_KEY_SPACE:
-				is_simulating = !is_simulating;
-				break;
-			case GLFW_KEY_L:
-				is_looping = !is_looping;
-				break;
+		case GLFW_KEY_SPACE:
+			is_simulating = !is_simulating;
+			break;
+		case GLFW_KEY_R:
+			is_looping = !is_looping;
+			break;
+		case GLFW_KEY_G:
+			gravity = !gravity;
+			std::cout << "Gravity: " << (gravity ? "On" : "Off") << '\n';
+			break;
 		}
 
 		return false;
 	};
 
+	std::cout << R"(
+  [Space] Start/Pause simulation
+  R,r     Toggle playback looping
+  A,a     Toggle gravity
+)";
 	viewer.launch();
 }
