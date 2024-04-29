@@ -173,13 +173,16 @@ int main(int argc, char *argv[])
 
 		viewer.callback_pre_draw = [&TV](igl::opengl::glfw::Viewer &viewer)->bool
 		{
-			char buf[7] = {0};
-			sprintf(buf, "TV%04d", frameNumber++);
+			if (is_simulating)
+			{
+				char buf[7] = {0};
+				sprintf(buf, "TV%04d", frameNumber++);
 
-			igl::deserialize(TV, std::string(buf), playback_file);
+				igl::deserialize(TV, std::string(buf), playback_file);
 
-			viewer.data().set_vertices(TV);
-			viewer.data().compute_normals();
+				viewer.data().set_vertices(TV);
+				viewer.data().compute_normals();
+			}
 			return false;
 		};
 
@@ -199,7 +202,24 @@ int main(int argc, char *argv[])
 
 			return false;
 		};
+		viewer.callback_key_down = [](igl::opengl::glfw::Viewer &viewer, unsigned char key, int mod)->bool
+		{
+			switch (key)
+			{
+			case GLFW_KEY_SPACE:
+				is_simulating = !is_simulating;
+				break;
+			case GLFW_KEY_R:
+				is_looping = !is_looping;
+				break;
+			}
 
+			return false;
+		};
+		std::cout << R"(
+  [Space] Start/Pause simulation
+  R,r     Toggle playback looping
+)";
 		viewer.launch();
 
 		return 0;
