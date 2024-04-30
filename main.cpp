@@ -97,13 +97,16 @@ int main(int argc, char *argv[])
 	static double youngs_modulus = 1e6;
 	static double poisson_ratio = 0.49;
 	static bool gravity = true;
+	static bool ground_plane_enabled = true;
+	static Eigen::RowVector4d ground_plane(0, 1, 0, 15);
+	static Eigen::Vector3d ground_normal(ground_plane.leftCols(3));
 
 	static int frameNumber = 0;
 
 	if (argc > 1)
 	{
 		int c;
-		while ((c = getopt(argc, argv, "n:wp:f:Y:P:m:")) != -1)
+		while ((c = getopt(argc, argv, "n:wp:f:Y:P:m:x:")) != -1)
 		{
 			switch (c)
 			{
@@ -134,6 +137,20 @@ int main(int argc, char *argv[])
 				else if (strcmp(optarg, "stneo") == 0)
 				{
 					material_type = eMaterialType_StableNeoHookean;
+				}
+				break;
+			case 'x':
+				if (strcmp(optarg, "none") == 0)
+				{
+					fixture_type = eFixtureType_None;
+				}
+				else if (strcmp(optarg, "one") == 0)
+				{
+					fixture_type = eFixtureType_OneEnd;
+				}
+				else if (strcmp(optarg, "both") == 0)
+				{
+					fixture_type = eFixtureType_BothEnds;
 				}
 				break;
 			case '?':
@@ -230,11 +247,19 @@ int main(int argc, char *argv[])
 
 	if (model_file.empty())
 	{
+	#if _DEBUG
+		make_cube_bar(8, V, F);
+		Eigen::Vector3d side_len(1., 1., 1.);
+		V.col(0) *= side_len(0);
+		V.col(1) *= side_len(1);
+		V.col(2) *= side_len(2);
+	#else
 		make_cube_bar(8, V, F);
 		Eigen::Vector3d side_len(4., 4., 4.);
 		V.col(0) *= side_len(0);
 		V.col(1) *= side_len(1);
 		V.col(2) *= side_len(2);
+	#endif
 	}
 	else
 	{
@@ -302,6 +327,32 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < f_external.rows(); i++)
 	{
 		f_external.row(i) = Eigen::Vector3d(0, -9.8, 0);
+	}
+
+	// Draw the ground plane
+	Eigen::MatrixXd GV, GV0, GV1;
+	if (ground_plane_enabled)
+	{
+		GV.resize(4, 3);
+		GV.row(0) << -50, -ground_plane(3), -50;
+		GV.row(1) << -50, -ground_plane(3),  50;
+		GV.row(2) <<  50, -ground_plane(3),  50;
+		GV.row(3) <<  50, -ground_plane(3), -50;
+
+		GV0.resize(6, 3);
+		GV1.resize(6, 3);
+		for (int i = 0; i < GV.rows(); i++)
+		{
+			GV0.row(i) = GV.row(i);
+			GV1.row(i) = GV.row((i + 1) % GV.rows());
+		}
+		GV0.row(4) = GV.row(0);
+		GV1.row(4) = GV.row(2);
+		GV0.row(5) = GV.row(1);
+		GV1.row(5) = GV.row(3);
+
+		viewer.data().add_points(GV, Eigen::RowVector3d(0.23, 0.87, 0.32));
+		viewer.data().add_edges(GV0, GV1, Eigen::RowVector3d(0.23, 0.87, 0.32));
 	}
 
 	static std::vector<Eigen::Index> edge_face_vertices;
@@ -405,6 +456,19 @@ int main(int argc, char *argv[])
 				f_external.setZero();
 			}
 
+			if (ground_plane_enabled)
+			{
+				Eigen::VectorXd penetration = simdata.X * ground_normal; // ax0 + by0 + cz0
+				penetration.array() += ground_plane(3); // ax0 + by0 + cz0 + d
+				//penetration *= -ground_plane(3);
+				penetration = penetration.cwiseMin(0);
+				penetration = -penetration * 1000;
+
+				const Eigen::MatrixXd f_collision = penetration * ground_normal.transpose();
+				f_external += f_collision;
+
+			}
+
 			Eigen::MatrixXd f_elastic;
 			//f_elastic.setZero(simdata.X.rows(), 3);
 			flesh::flesh_elastic_forces(simdata.X, simdata.T, simdata.B, simdata.W, material->get_piola_kirchhoff_fn(), f_elastic);
@@ -454,7 +518,7 @@ int main(int argc, char *argv[])
 		}
 	};
 
-	viewer.callback_pre_draw = [&simulation_update,&TV,&simdata](igl::opengl::glfw::Viewer &viewer)->bool
+	viewer.callback_pre_draw = [&simulation_update,&TV,&simdata,&GV](igl::opengl::glfw::Viewer &viewer)->bool
 	{
 		static double t_start = igl::get_seconds();
 		double t = igl::get_seconds();
@@ -471,12 +535,20 @@ int main(int argc, char *argv[])
 		viewer.data().set_vertices(TV);
 		viewer.data().compute_normals();
 
-		Eigen::Matrix<double,Eigen::Dynamic,3> edge_verts(edge_face_vertices.size(), 3);
-		for (int i = 0; i < edge_face_vertices.size(); i++)
+		viewer.data().clear_points();
+		if (ground_plane_enabled)
 		{
-			edge_verts.row(i) = simdata.X.row(edge_face_vertices[i]);
+			viewer.data().add_points(GV, Eigen::RowVector3d(0.23, 0.87, 0.32));
 		}
-		viewer.data().set_points(edge_verts, Eigen::RowVector3d(0.87, 0.35, 0.21));
+		if (fixture_type != eFixtureType_None)
+		{
+			Eigen::Matrix<double,Eigen::Dynamic,3> edge_verts(edge_face_vertices.size(), 3);
+			for (int i = 0; i < edge_face_vertices.size(); i++)
+			{
+				edge_verts.row(i) = simdata.X.row(edge_face_vertices[i]);
+			}
+			viewer.data().add_points(edge_verts, Eigen::RowVector3d(0.87, 0.35, 0.21));
+		}
 
 		return false;
 	};
@@ -514,8 +586,16 @@ int main(int argc, char *argv[])
 			is_looping = !is_looping;
 			break;
 		case GLFW_KEY_G:
-			gravity = !gravity;
-			std::cout << "Gravity: " << (gravity ? "On" : "Off") << '\n';
+			if (mod == GLFW_MOD_SHIFT || mod == GLFW_MOD_CAPS_LOCK)
+			{
+				ground_plane_enabled = !ground_plane_enabled;
+				std::cout << "Ground plane: " << (ground_plane_enabled ? "On" : "Off") << '\n';
+			}
+			else
+			{
+				gravity = !gravity;
+				std::cout << "Gravity: " << (gravity ? "On" : "Off") << '\n';
+			}
 			break;
 		}
 
@@ -525,7 +605,8 @@ int main(int argc, char *argv[])
 	std::cout << R"(
   [Space] Start/Pause simulation
   R,r     Toggle playback looping
-  A,a     Toggle gravity
+  g       Toggle gravity
+  G       Toggle ground plane
 )";
 	viewer.launch();
 }

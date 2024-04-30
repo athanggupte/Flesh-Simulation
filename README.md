@@ -29,14 +29,14 @@ Run the simulation:
 Examples:
   - To run a new simulation with default parameters:
 	```
-	./build/driver
+	./driver
 	```
   - To run a new simulation and write the simulation to file:
     ```
-    ./build/driver -w -n 100
+    ./driver -w -n 100
     ```
     Simulation is saved to `sim.dat`
   - To playback a simulation from file:
 	```
-	./build/driver -p sim.dat
+	./driver -p sim.dat
 	```
